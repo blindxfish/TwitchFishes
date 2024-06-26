@@ -1,3 +1,5 @@
 oauth:<placeholder>
 nick:<placeholder>
 channel:<placeholder>
+
+// DELETE THIS LINE AND RENAME TO config.txt
