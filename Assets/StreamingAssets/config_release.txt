@@ -1,0 +1,3 @@
+oauth:<placeholder>
+nick:<placeholder>
+channel:<placeholder>
