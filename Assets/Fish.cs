@@ -13,10 +13,10 @@ public class Fish : MonoBehaviour
 
     private bool isMovingTowardsFood = false;  // Flag to manage food movement
     private SpriteRenderer spr;
-    private bool inWater = false;
+    public bool inWater = false;
     private Vector2 direction;
     private float directionChangeInterval = 2f;
-    private float moveSpeed = 50f;
+    private float moveSpeed = 30f;
     public GameObject scorePrefab; // Prefab for displaying score effects
     void Start()
     {
@@ -71,22 +71,21 @@ public class Fish : MonoBehaviour
             direction = new Vector2(Random.Range(-1f, 1f), Random.Range(-1f, 1f));
             directionChangeInterval = Random.Range(2f, 5f);
         }
-
+        
         // Flip the fish's rotation based on the direction of movement
         if (direction.x > 0)
         {
             spr.flipX = false;
-          //  transform.localScale = new Vector3(1, 1, 1);
         }
         else if (direction.x < 0)
         {
             spr.flipX = true;
-            // transform.localScale = new Vector3(-1, 1, 1);
         }
 
         // Move in the chosen direction
-        rb.velocity = direction;
+        rb.velocity = direction * moveSpeed * Time.deltaTime;
     }
+
 
     void ClampPositionToWaterBounds()
     {
@@ -144,10 +143,24 @@ public class Fish : MonoBehaviour
 
     }
 
+    public void Eaten()
+    {
+        FindObjectOfType<TwitchChat>().LostScore(gameObject); // Assuming one instance of TwitchChat
+        this.gameObject.GetComponent<SpriteRenderer>().enabled = false;
+        DeadScoreScoreEffect();
+    }
+
     private void DisplayScoreEffect()
     {
         GameObject scoreEffect = Instantiate(scorePrefab, transform.position, Quaternion.identity);
         scoreEffect.GetComponentInChildren<TMP_Text>().text = playerName + " +1";
+        StartCoroutine(FloatAndFade(scoreEffect));
+    }
+
+    private void DeadScoreScoreEffect()
+    {
+        GameObject scoreEffect = Instantiate(scorePrefab, transform.position, Quaternion.identity);
+        scoreEffect.GetComponentInChildren<TMP_Text>().text = playerName + " is EATEN!!!";
         StartCoroutine(FloatAndFade(scoreEffect));
     }
 

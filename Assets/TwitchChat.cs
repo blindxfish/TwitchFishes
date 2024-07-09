@@ -19,7 +19,7 @@ public class TwitchChat : MonoBehaviour
 
     // Dictionary to hold users and the time when their object should be removed
     private Dictionary<string, float> users = new Dictionary<string, float>();
-    private Dictionary<string, GameObject> userObjects = new Dictionary<string, GameObject>();
+    public Dictionary<string, GameObject> userObjects = new Dictionary<string, GameObject>();
     private Dictionary<string, int> scores = new Dictionary<string, int>(); // Track scores per username
 
     private ConcurrentQueue<Action> actions = new ConcurrentQueue<Action>();
@@ -27,16 +27,21 @@ public class TwitchChat : MonoBehaviour
     public GameObject alertCanvas;
 
     public BoxCollider2D spawnArea;
+    public BoxCollider2D dolphinSpawnArea;
 
     public GameObject topFishCanvas; // Assign this in the Unity Editor
     private TMP_Text topFishText; // This will be the TextMeshProUGUI component
 
 
     public GameObject fishPrefab;
-    public GameObject foodPrefab
-        ;
+    public GameObject foodPrefab;
+    public GameObject dolphinPrefab;
+    public GameObject dissapDolphPrefab; // Prefab for the disappointed dolphin
+
     public Sprite[] fishSprites;
 
+    private float lastDolphinTime = 0f; // Timestamp for the last dolphin action
+    private const float dolphinCooldown = 60f; // Cooldown time in seconds
 
     void Start()
     {
@@ -75,7 +80,7 @@ public class TwitchChat : MonoBehaviour
 
         }
         Application.runInBackground = true;
-   //     fishSprites = Resources.LoadAll<Sprite>("Fishes");
+        //     fishSprites = Resources.LoadAll<Sprite>("Fishes");
 
         ws = new WebSocket("wss://irc-ws.chat.twitch.tv:443");
 
@@ -130,12 +135,12 @@ public class TwitchChat : MonoBehaviour
         ws.Send($"PASS oauth:{configValues["oauth"]}");
         ws.Send($"NICK {configValues["nick"]}");
         ws.Send($"JOIN #{configValues["channel"]}");
-        
+
     }
 
     private void OnMessageHandler(object sender, MessageEventArgs e)
     {
-   //     Debug.Log("WebSocket server said: " + e.Data);
+        Debug.Log(e.Data);
         // Check if the message is a PING
         if (e.Data.StartsWith("PING"))
         {
@@ -146,7 +151,7 @@ public class TwitchChat : MonoBehaviour
         // Check if the message is a PRIVMSG
         if (e.Data.Contains("PRIVMSG"))
         {
-          //  Debug.Log(e.Data);
+            //  Debug.Log(e.Data);
             // Parse the username from the raw message
             string pattern = @"display-name=([^;]+)";
             string foodPatter = @"!food";
@@ -166,9 +171,9 @@ public class TwitchChat : MonoBehaviour
                 username = "??X??X?";
             }
 
-            if(foodMatch.Success)
+            if (foodMatch.Success)
             {
-           //     Debug.Log("Food requested!");
+                //     Debug.Log("Food requested!");
                 actions.Enqueue(makeFood); // Enqueue the action to make food
             }
 
@@ -179,10 +184,26 @@ public class TwitchChat : MonoBehaviour
             {
                 actions.Enqueue(DisplayTopFish);
             }
+            if (e.Data.Contains("!dolphin"))
+            {
+                actions.Enqueue(() =>
+                {
+                    if (Time.time - lastDolphinTime >= dolphinCooldown)
+                    {
+                        doDolphin();
+                        lastDolphinTime = Time.time;
+                    }
+                    else
+                    {
+                        ShowDisappointedDolphin();
+                    }
+                });
+            }
+
         }
         else
         {
-           // Debug.Log("Received message in unexpected format: " + e.Data);
+            // Debug.Log("Received message in unexpected format: " + e.Data);
         }
     }
 
@@ -215,6 +236,16 @@ public class TwitchChat : MonoBehaviour
         scores[username]++;
     }
 
+    public void LostScore(GameObject fishObjetc)
+    {
+        Fish fishScript = fishObjetc.GetComponent<Fish>();
+        fishScript.inWater = false;
+        if (!scores.ContainsKey(fishScript.playerName))
+            scores[fishScript.playerName] = 0;
+        scores[fishScript.playerName] = scores[fishScript.playerName] - 25;
+        StartCoroutine(ReaspawnFish(fishObjetc));
+    }
+
     private void OnCloseHandler(object sender, CloseEventArgs e)
     {
         Debug.Log("WebSocket closed with reason: " + e.Reason);
@@ -239,9 +270,9 @@ public class TwitchChat : MonoBehaviour
         SpriteRenderer spriteRenderer = fishObject.GetComponent<SpriteRenderer>();
         if (spriteRenderer != null)
         {
-           // Debug.Log(fishSprites.Length);
+            // Debug.Log(fishSprites.Length);
             // Choose a random sprite and assign it to the SpriteRenderer
-            spriteRenderer.sprite = fishSprites[UnityEngine.Random.Range(0, fishSprites.Length-1)];
+            spriteRenderer.sprite = fishSprites[UnityEngine.Random.Range(0, fishSprites.Length - 1)];
         }
         else
         {
@@ -293,17 +324,17 @@ public class TwitchChat : MonoBehaviour
                 users[username] = 900;
                 Debug.Log("Time updated to " + users[username]);
             });
-          
+
         }
         else
         {
             // Instead of directly calling CreateObjectForUser, queue up the action
             actions.Enqueue(() => {
-            //    Debug.Log(username);
+                //    Debug.Log(username);
                 // Add the user and instantiate a new object for them
                 users.Add(username, 900);
                 userObjects.Add(username, CreateObjectForUser(username));
-             //   Debug.Log("New fish added and the time set to" + users[username]);
+                //   Debug.Log("New fish added and the time set to" + users[username]);
             });
         }
     }
@@ -313,13 +344,51 @@ public class TwitchChat : MonoBehaviour
         Vector2 spawnPosition = new Vector2(
         UnityEngine.Random.Range(spawnArea.bounds.min.x, spawnArea.bounds.max.x),
         UnityEngine.Random.Range(spawnArea.bounds.min.y, spawnArea.bounds.max.y)
-    );
+        );
 
         // Instantiate the foodPrefab at the calculated position
         GameObject fishFood = Instantiate(foodPrefab, spawnPosition, Quaternion.identity); // Use Quaternion.identity for no rotation
-        
+
     }
 
+    public void doDolphin()
+    {
+        Vector2 spawnPosition = new Vector2(
+       UnityEngine.Random.Range(dolphinSpawnArea.bounds.min.x, dolphinSpawnArea.bounds.max.x),
+       UnityEngine.Random.Range(dolphinSpawnArea.bounds.min.y, dolphinSpawnArea.bounds.max.y)
+       );
+
+        // Instantiate the foodPrefab at the calculated position
+        GameObject dolphin = Instantiate(dolphinPrefab, spawnPosition, Quaternion.identity); // Use Quaternion.identity for no rotation
+
+    }
+
+    public void ShowDisappointedDolphin()
+    {
+        Vector2 spawnPosition = new Vector2(-17, -7);
+        GameObject dissapDolph = Instantiate(dissapDolphPrefab, spawnPosition, Quaternion.identity);
+        StartCoroutine(RemoveDissapDolphAfterDelay(dissapDolph, 3f));
+    }
+
+    private IEnumerator RemoveDissapDolphAfterDelay(GameObject dissapDolph, float delay)
+    {
+        yield return new WaitForSeconds(delay);
+        Destroy(dissapDolph);
+    }
+
+    IEnumerator ReaspawnFish(GameObject fish)
+    {
+        yield return new WaitForSeconds(3f);
+
+        Vector2 spawnPosition = new Vector2(
+        UnityEngine.Random.Range(spawnArea.bounds.min.x, spawnArea.bounds.max.x),
+        UnityEngine.Random.Range(spawnArea.bounds.min.y, spawnArea.bounds.max.y)
+        );
+
+        fish.transform.position = spawnPosition;
+        fish.GetComponent<SpriteRenderer>().enabled = true;
+
+    }
 
     public void SimulateChatMessage()
     {
@@ -361,4 +430,3 @@ public class TwitchChat : MonoBehaviour
         }
     }
 }
-

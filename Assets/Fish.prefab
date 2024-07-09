@@ -153,6 +153,8 @@ MonoBehaviour:
   spawnArea: {fileID: 0}
   playerNameText: {fileID: 0}
   playerName: 
+  inWater: 0
+  scorePrefab: {fileID: 0}
 --- !u!114 &-8882881921056330722
 MonoBehaviour:
   m_ObjectHideFlags: 0
