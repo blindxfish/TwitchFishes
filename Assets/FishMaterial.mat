@@ -245,11 +245,11 @@ Material:
     - _TwistUvPosY: 0.5
     - _TwistUvRadius: 0.75
     - _UVSec: 0
-    - _WaveAmount: 13.5
+    - _WaveAmount: 10.5
     - _WaveSpeed: 9.3
-    - _WaveStrength: 9.3
-    - _WaveX: 1
-    - _WaveY: 0
+    - _WaveStrength: 14
+    - _WaveX: 0.8
+    - _WaveY: 0.5
     - _ZTestMode: 4
     - _ZWrite: 1
     - _ZoomUvAmount: 0.5

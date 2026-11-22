@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>TwitchFishes Controls</title>
+    <link rel="stylesheet" href="/dashboard.css">
+    <script src="/dashboard.js" defer></script>
+</head>
+<body>
+    <main>
+        <header class="masthead">
+            <h1>TwitchFishes <span>controls</span></h1>
+            <p id="dashboard-status" class="status" role="status">Opening local dashboard…</p>
+        </header>
+
+        <div class="dashboard">
+            <div class="sidebar">
+                <section class="card" aria-labelledby="signin-title">
+                    <h2 id="signin-title">Twitch sign-in</h2>
+                    <p class="status" id="signin-detail" role="status"></p>
+                    <form id="signin-form" autocomplete="off">
+                        <details id="twitch-app-setup">
+                            <summary>One-time Twitch app setup</summary>
+                            <p><a href="https://dev.twitch.tv/console/apps" target="_blank" rel="noopener noreferrer">Register a Twitch application</a> with Client Type <strong>Public</strong> and redirect URL <code>http://localhost</code>. Copy its Client ID here.</p>
+                            <label for="twitch-client-id">Twitch app Client ID</label>
+                            <input id="twitch-client-id" name="clientId" maxlength="64" spellcheck="false" placeholder="Client ID from the Twitch Developer Console">
+                        </details>
+                        <label class="check"><input id="signin-remember" type="checkbox"> Remember sign-in on this device</label>
+                        <p id="signin-remember-unavailable" hidden>Remembering a sign-in is unavailable in this instance.</p>
+                        <div class="actions">
+                            <button id="signin-start" class="primary" type="submit" disabled>Connect with Twitch</button>
+                            <button type="button" data-command="cancelTwitchSignIn" hidden disabled>Cancel</button>
+                        </div>
+                    </form>
+                    <div id="twitch-challenge" class="challenge" hidden>
+                        <a id="twitch-approve" class="button" target="_blank" rel="noopener noreferrer">Authorize on Twitch ↗</a>
+                        <p>Confirmation code <code id="twitch-user-code"></code></p>
+                    </div>
+                    <div class="actions">
+                        <button type="button" data-command="disconnectTwitch" hidden disabled>Disconnect Twitch</button>
+                    </div>
+                </section>
+
+                <section class="card" aria-labelledby="capture-title">
+                    <h2 id="capture-title">OBS capture</h2>
+                    <p>Use <strong>Game Capture → Capture specific window</strong> and select <strong>TwitchFishes</strong>.</p>
+                    <p class="key"><span class="swatch" aria-hidden="true"></span> Add a <strong>Chroma Key</strong> filter and choose green.</p>
+                    <a href="https://obsproject.com/kb/game-capture-source" target="_blank" rel="noopener noreferrer">OBS Game Capture guide</a>
+                </section>
+
+                <section class="card" aria-labelledby="chat-title">
+                    <div class="section-head">
+                        <h2 id="chat-title">Twitch chat</h2>
+                        <span class="pill" id="chat-badge">Offline</span>
+                    </div>
+                    <p class="status" id="chat-detail" role="status"></p>
+                    <details id="manual-chat">
+                    <summary>Use a chat token manually</summary>
+                    <form id="chat-form" autocomplete="off">
+                        <label for="channel">Channel</label>
+                        <input id="channel" name="channel" placeholder="#yourchannel" maxlength="26" required>
+                        <label for="chat-login">Chat account</label>
+                        <input id="chat-login" name="login" placeholder="Twitch login" maxlength="25" required>
+                        <label for="chat-token">OAuth token</label>
+                        <input id="chat-token" name="token" type="password" autocomplete="new-password" maxlength="518" placeholder="User access token with chat:read">
+                        <label class="check"><input id="chat-remember" type="checkbox"> Remember token locally</label>
+                        <div class="actions">
+                            <button class="primary" type="submit" disabled>Connect chat</button>
+                            <button type="button" data-command="disconnectChat" disabled>Disconnect</button>
+                        </div>
+                    </form>
+                    </details>
+                </section>
+
+                <section class="card" aria-labelledby="aquarium-title">
+                    <h2 id="aquarium-title">Aquarium actions</h2>
+                    <p>These actions run in the captured aquarium.</p>
+                    <div class="actions">
+                        <button type="button" data-command="demoFish" disabled>Add demo fish</button>
+                        <button type="button" data-command="dropFood" disabled>Drop food</button>
+                    </div>
+                </section>
+            </div>
+
+            <section class="card rewards" aria-labelledby="rewards-title">
+                <div class="section-head">
+                    <h2 id="rewards-title">Channel Points rewards</h2>
+                    <span class="pill" id="rewards-badge">Offline</span>
+                </div>
+                <p class="status" id="rewards-detail" role="status"></p>
+                <details id="manual-rewards">
+                <summary>Use a broadcaster token manually</summary>
+                <form id="rewards-form" autocomplete="off">
+                    <label for="rewards-token">Broadcaster token</label>
+                    <div class="rewards-connect">
+                        <input id="rewards-token" name="token" type="password" autocomplete="new-password" maxlength="518" placeholder="Paste a broadcaster token or use the chat token">
+                        <button class="primary" type="submit" disabled>Connect rewards</button>
+                        <button type="button" data-command="disconnectRewards" disabled>Stop</button>
+                    </div>
+                    <label class="check"><input id="rewards-remember" type="checkbox"> Remember broadcaster token locally</label>
+                </form>
+                </details>
+
+                <details>
+                    <summary>Set up Twitch rewards</summary>
+                    <ol>
+                        <li>Create a custom reward in the Twitch Creator Dashboard under Viewer Rewards → Channel Points.</li>
+                        <li>Use <strong>Connect with Twitch</strong> and approve access as the broadcaster.</li>
+                        <li>Choose an aquarium action for each reward. Refresh the list after editing rewards on Twitch.</li>
+                    </ol>
+                    <div class="actions">
+                        <a href="https://help.twitch.tv/s/article/channel-points-guide" target="_blank" rel="noopener noreferrer">Twitch reward guide</a>
+                    </div>
+                </details>
+
+                <div class="section-head list-head">
+                    <h3 id="catalog-heading">Custom rewards</h3>
+                    <div class="actions">
+                        <button type="button" data-command="refreshRewards" disabled>Refresh list</button>
+                        <a id="manage-rewards" class="button" href="https://dashboard.twitch.tv/viewer-rewards/channel-points/rewards" target="_blank" rel="noopener noreferrer">Manage on Twitch</a>
+                    </div>
+                </div>
+                <p id="catalog-empty">Connect with Twitch to load the channel’s custom rewards.</p>
+                <div id="reward-table" class="table-scroll" hidden>
+                    <table>
+                        <thead><tr><th scope="col">Reward</th><th scope="col">Aquarium action</th><th scope="col"><span class="sr-only">Preview</span></th></tr></thead>
+                        <tbody id="reward-rows"></tbody>
+                    </table>
+                </div>
+                <p id="latest-redemption" class="latest" role="status">Latest redemption will appear here.</p>
+            </section>
+        </div>
+    </main>
+</body>
+</html>

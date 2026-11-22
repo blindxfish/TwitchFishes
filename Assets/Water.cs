@@ -1,31 +1,48 @@
 using System.Collections.Generic;
 using UnityEngine;
 
+[RequireComponent(typeof(BoxCollider2D))]
 public class Water : MonoBehaviour
 {
-    [SerializeField]
-    public static List<GameObject> foodObjects = new List<GameObject>(); // Public static list accessed by the fish
+    private readonly HashSet<fishFood> food = new HashSet<fishFood>();
 
-    void OnTriggerEnter2D(Collider2D other)
+    public BoxCollider2D Area { get; private set; }
+
+    private void Awake()
     {
-        if (other.gameObject.CompareTag("FishFood"))
-        {
-          
-                foodObjects.Add(other.gameObject);
-                Rigidbody2D rb = other.GetComponent<Rigidbody2D>();
-                rb.gravityScale = 0;
-                rb.velocity = Vector2.zero;
-                rb.angularVelocity = 0;
-          
-        }
+        Area = GetComponent<BoxCollider2D>();
     }
 
-
-    void OnTriggerExit2D(Collider2D other)
+    private void OnTriggerEnter2D(Collider2D other)
     {
-        if (other.gameObject.CompareTag("FishFood"))
+        if (other.TryGetComponent(out fishFood pellet) && pellet.FloatIn(this))
+            food.Add(pellet);
+    }
+
+    private void OnTriggerExit2D(Collider2D other)
+    {
+        if (other.TryGetComponent(out fishFood pellet))
+            pellet.Leave(this);
+    }
+
+    public void RemoveFood(fishFood pellet)
+    {
+        food.Remove(pellet);
+    }
+
+    public fishFood FindClosestFood(Vector2 position)
+    {
+        fishFood closest = null;
+        float nearestDistance = float.PositiveInfinity;
+        foreach (fishFood pellet in food)
         {
-            foodObjects.Remove(other.gameObject);
+            float distance = ((Vector2)pellet.transform.position - position).sqrMagnitude;
+            if (distance < nearestDistance)
+            {
+                closest = pellet;
+                nearestDistance = distance;
+            }
         }
+        return closest;
     }
 }

@@ -1,5 +1,5 @@
-oauth:<placeholder>
-nick:<placeholder>
+# Legacy Twitch configuration. The game also has an in-game Twitch settings panel.
+# To use this file locally, copy it to config.txt and replace the placeholder values.
 channel:<placeholder>
-
-// DELETE THIS LINE AND RENAME TO config.txt
+nick:<placeholder>
+oauth:<placeholder>

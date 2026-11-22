@@ -1,432 +1,374 @@
 using System;
 using System.Collections;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Text.RegularExpressions;
 using TMPro;
-using Unity.VisualScripting;
 using UnityEngine;
-using UnityEngine.Windows;
-using WebSocketSharp;
-using ErrorEventArgs = WebSocketSharp.ErrorEventArgs;
-using File = System.IO.File;
+using Random = UnityEngine.Random;
 
-public class TwitchChat : MonoBehaviour
+public partial class TwitchChat : MonoBehaviour
 {
-    private WebSocket ws;
+    [Header("Aquarium")]
+    [SerializeField] private Water water;
+    [SerializeField] private BoxCollider2D spawnArea;
+    [SerializeField] private BoxCollider2D dolphinSpawnArea;
+    [SerializeField] private Fish fishPrefab;
+    [SerializeField] private GameObject foodPrefab;
+    [SerializeField] private Dolphin dolphinPrefab;
+    [SerializeField] private GameObject dissapDolphPrefab;
+    [SerializeField] private Sprite[] fishSprites;
+    [SerializeField] private GameObject topFishCanvas;
 
-    // Dictionary to hold users and the time when their object should be removed
-    private Dictionary<string, float> users = new Dictionary<string, float>();
-    public Dictionary<string, GameObject> userObjects = new Dictionary<string, GameObject>();
-    private Dictionary<string, int> scores = new Dictionary<string, int>(); // Track scores per username
+    private const float FishLifetime = 900f;
+    private const float DolphinCooldown = 60f;
+    private static readonly char[] CommandSeparators = { ' ', '\t' };
 
-    private ConcurrentQueue<Action> actions = new ConcurrentQueue<Action>();
-    private Dictionary<string, string> configValues = new Dictionary<string, string>();
-    public GameObject alertCanvas;
-
-    public BoxCollider2D spawnArea;
-    public BoxCollider2D dolphinSpawnArea;
-
-    public GameObject topFishCanvas; // Assign this in the Unity Editor
-    private TMP_Text topFishText; // This will be the TextMeshProUGUI component
-
-
-    public GameObject fishPrefab;
-    public GameObject foodPrefab;
-    public GameObject dolphinPrefab;
-    public GameObject dissapDolphPrefab; // Prefab for the disappointed dolphin
-
-    public Sprite[] fishSprites;
-
-    private float lastDolphinTime = 0f; // Timestamp for the last dolphin action
-    private const float dolphinCooldown = 60f; // Cooldown time in seconds
-
-    void Start()
+    private sealed class Viewer
     {
+        public Fish Fish;
+        public string DisplayName;
+        public float ExpiresAt;
+        public int Score;
+    }
 
-        string path = Application.streamingAssetsPath + "/config.txt";
-        // Assign the TMP_Text component from the child of topFishCanvas
-        topFishText = topFishCanvas.GetComponentInChildren<TMP_Text>();
+    private readonly Dictionary<string, Viewer> viewers = new Dictionary<string, Viewer>(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> recentMessages = new HashSet<string>();
+    private readonly Queue<string> messageOrder = new Queue<string>();
+    private readonly List<string> expiredViewers = new List<string>();
+    private TwitchSettings settings;
+    private TwitchSettings manualSettings;
+    private TwitchIrcConnection connection;
+    private TwitchRewards rewards;
+    private TwitchDeviceSignIn signIn;
+    private TMP_Text topFishText;
+    private Coroutine hideScores;
+    private string currentChannel;
+    private string saveError;
+    private float retryAt = float.PositiveInfinity;
+    private float retryDelay = 2f;
+    private float nextDolphinTime;
+    private int demoCount;
 
-        // Initially hide the topFishCanvas
-        topFishCanvas.SetActive(false);
-        if (File.Exists(path))
-        {
-            string[] configData = File.ReadAllLines(path);
-
-            foreach (string line in configData)
-            {
-                if (line.Contains("<placeholder>"))
-                {
-                    // Placeholder found. Activate canvas.
-                    alertCanvas.SetActive(true);
-                    return;
-                }
-                else
-                {
-                    alertCanvas.SetActive(false);
-                    LoadConfig();
-                }
-            }
-            // Placeholder not found. Deactivate canvas.
-            alertCanvas.SetActive(false);
-        }
-        else
-        {
-            // File does not exist. Activate canvas.
-            alertCanvas.SetActive(true);
-
-        }
+    private void Start()
+    {
         Application.runInBackground = true;
-        //     fishSprites = Resources.LoadAll<Sprite>("Fishes");
+        topFishText = topFishCanvas.GetComponentInChildren<TMP_Text>(true);
+        topFishText.richText = false;
+        topFishCanvas.SetActive(false);
 
-        ws = new WebSocket("wss://irc-ws.chat.twitch.tv:443");
-
-        ws.OnOpen += OnOpenHandler;
-        ws.OnMessage += OnMessageHandler;
-        ws.OnClose += OnCloseHandler;
-        ws.OnError += OnErrorHandler;
-
-        ws.Connect();
-
-        StartCoroutine(CheckAndRemoveObjects());
-    }
-
-
-    void Update()
-    {
-        while (actions.TryDequeue(out Action action))
-        {
-            action.Invoke();
-        }
-    }
-
-    void LoadConfig()
-    {
-        string path = Application.streamingAssetsPath + "/config.txt";
+        string loadError = null;
         try
         {
-            using (StreamReader reader = new StreamReader(path))
+            settings = TwitchSettings.Load();
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            settings = new TwitchSettings();
+            loadError = "Saved Twitch settings could not be read. Enter your settings again.";
+        }
+
+        manualSettings = settings;
+        rewards = new TwitchRewards(HandleReward);
+        signIn = new TwitchDeviceSignIn(ConnectSignedInAccount, DisconnectSignedInAccount);
+        SetStatus("Offline", loadError ?? "Connect with Twitch to read your channel’s chat.", false, false);
+        StartDashboard();
+        if (!signIn.OwnsConnection)
+            rewards.Restore(settings);
+        if (!signIn.OwnsConnection && settings.autoConnect)
+        {
+            if (settings.Normalize(out string error))
             {
-                string line;
-                while ((line = reader.ReadLine()) != null)
-                {
-                    string[] parts = line.Split(':');
-                    if (parts.Length == 2)
-                    {
-                        configValues[parts[0]] = parts[1];
-                    }
-                }
-            }
-        }
-        catch (Exception e)
-        {
-            Debug.LogError("Could not load config file: " + e.Message);
-        }
-    }
-
-    private void OnOpenHandler(object sender, System.EventArgs e)
-    {
-        Debug.Log("WebSocket connected!");
-
-        ws.Send("CAP REQ :twitch.tv/tags twitch.tv/commands twitch.tv/membership");
-        ws.Send($"PASS oauth:{configValues["oauth"]}");
-        ws.Send($"NICK {configValues["nick"]}");
-        ws.Send($"JOIN #{configValues["channel"]}");
-
-    }
-
-    private void OnMessageHandler(object sender, MessageEventArgs e)
-    {
-        Debug.Log(e.Data);
-        // Check if the message is a PING
-        if (e.Data.StartsWith("PING"))
-        {
-            // Send a PONG back with the message received from the PING
-            ws.Send($"PONG :{e.Data.Substring(e.Data.IndexOf(":") + 1)}");
-        }
-
-        // Check if the message is a PRIVMSG
-        if (e.Data.Contains("PRIVMSG"))
-        {
-            //  Debug.Log(e.Data);
-            // Parse the username from the raw message
-            string pattern = @"display-name=([^;]+)";
-            string foodPatter = @"!food";
-
-            Match match = Regex.Match(e.Data, pattern);
-            Match foodMatch = Regex.Match(e.Data, foodPatter);
-
-            string username = string.Empty;
-
-            if (match.Success)
-            {
-                // The username is in the first group of the match
-                username = match.Groups[1].Value;
+                currentChannel = settings.channel;
+                StartConnection();
             }
             else
-            {
-                username = "??X??X?";
-            }
-
-            if (foodMatch.Success)
-            {
-                //     Debug.Log("Food requested!");
-                actions.Enqueue(makeFood); // Enqueue the action to make food
-            }
-
-            HandleMessage(username);
-
-            // Check for !topFish command
-            if (e.Data.Contains("!topFish"))
-            {
-                actions.Enqueue(DisplayTopFish);
-            }
-            if (e.Data.Contains("!dolphin"))
-            {
-                actions.Enqueue(() =>
-                {
-                    if (Time.time - lastDolphinTime >= dolphinCooldown)
-                    {
-                        doDolphin();
-                        lastDolphinTime = Time.time;
-                    }
-                    else
-                    {
-                        ShowDisappointedDolphin();
-                    }
-                });
-            }
-
+                SetStatus("Check settings", error, false, false);
         }
+
+        StartCoroutine(RemoveInactiveFish());
+    }
+
+    private void Update()
+    {
+        if (Input.GetKeyDown(KeyCode.F2))
+            OpenDashboard();
+
+        signIn.Update();
+        rewards.Update();
+        if (Time.unscaledTime >= retryAt)
+            StartConnection();
+
+        for (int i = 0; i < 128 && connection != null && connection.TryRead(out var chatEvent); i++)
+        {
+            switch (chatEvent.Type)
+            {
+                case TwitchIrcConnection.EventType.Joined:
+                    retryDelay = 2f;
+                    SetStatus($"Live · {chatEvent.Text}", $"Connected to {chatEvent.Text}.", true, true);
+                    break;
+                case TwitchIrcConnection.EventType.Chat:
+                    if (IsNewMessage(chatEvent.Id))
+                        HandleChat(chatEvent.Login, chatEvent.DisplayName, chatEvent.Text);
+                    break;
+                case TwitchIrcConnection.EventType.Retry:
+                    CloseConnection();
+                    retryAt = Time.unscaledTime + retryDelay;
+                    retryDelay = Mathf.Min(retryDelay * 2f, 30f);
+                    SetStatus("Reconnecting", $"{chatEvent.Text} Retrying automatically.", false, true);
+                    break;
+                case TwitchIrcConnection.EventType.Error:
+                    CloseConnection();
+                    SetStatus("Check settings", chatEvent.Text, false, false);
+                    break;
+            }
+        }
+
+        dashboard?.Update(HandleDashboardRequest);
+    }
+
+    private void Connect(TwitchSettings requested, bool fromSignIn = false)
+    {
+        if (!requested.Normalize(out string error))
+        {
+            chatStatus.error = error;
+            return;
+        }
+
+        rewards.ChatChannelChanged(requested.channel, persistManualSettings: !fromSignIn);
+        if (currentChannel != null && currentChannel != requested.channel)
+        {
+            foreach (Viewer viewer in viewers.Values)
+                if (viewer.Fish != null)
+                    Destroy(viewer.Fish.gameObject);
+            viewers.Clear();
+            recentMessages.Clear();
+            messageOrder.Clear();
+            topFishCanvas.SetActive(false);
+        }
+
+        settings = requested;
+        currentChannel = settings.channel;
+        if (fromSignIn)
+            saveError = null;
         else
         {
-            // Debug.Log("Received message in unexpected format: " + e.Data);
+            manualSettings = settings;
+            settings.autoConnect = true;
+            SaveSettings();
+        }
+        retryDelay = 2f;
+        StartConnection();
+    }
+
+    private void ConnectSignedInAccount(string login, string token)
+    {
+        Connect(new TwitchSettings { channel = login, login = login, token = token }, fromSignIn: true);
+        rewards.Connect("", false, settings, fromSignIn: true);
+    }
+
+    private void DisconnectSignedInAccount()
+    {
+        CloseConnection();
+        rewards.Disconnect(persistManualSettings: false);
+        settings = manualSettings;
+        SetStatus("Offline", "Disconnected from Twitch.", false, false);
+    }
+
+    private void Disconnect()
+    {
+        CloseConnection();
+        settings.autoConnect = false;
+        SaveSettings();
+        SetStatus("Offline", "Disconnected from Twitch chat.", false, false);
+    }
+
+    private void SaveSettings()
+    {
+        saveError = null;
+        try
+        {
+            settings.Save();
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            saveError = "Settings could not be saved on this device.";
         }
     }
 
-
-    private void DisplayTopFish()
+    private void SetStatus(string summary, string detail, bool connected, bool canDisconnect)
     {
-        var topScorers = scores.OrderByDescending(pair => pair.Value).Take(5).ToList();
-        string topScoresMessage = "Top Fishes:\n";
-        foreach (var scorer in topScorers)
-        {
-            topScoresMessage += $"{scorer.Key}: {scorer.Value}\n";
-        }
-
-        // Update the text component and show the canvas
-        topFishText.text = topScoresMessage;
-        topFishCanvas.SetActive(true);
-
-        // Start coroutine to hide the canvas after 5 seconds
-        StartCoroutine(HideTopFishCanvas());
-    }
-    private IEnumerator HideTopFishCanvas()
-    {
-        yield return new WaitForSeconds(5); // Wait for 5 seconds
-        topFishCanvas.SetActive(false); // Then hide the canvas
-    }
-    public void UpdateScore(string username)
-    {
-        if (!scores.ContainsKey(username))
-            scores[username] = 0;
-        scores[username]++;
+        chatStatus.summary = summary;
+        chatStatus.detail = saveError == null ? detail : $"{detail} {saveError}";
+        chatStatus.connected = connected;
+        chatStatus.canDisconnect = canDisconnect;
+        chatStatus.error = null;
     }
 
-    public void LostScore(GameObject fishObjetc)
+    private void StartConnection()
     {
-        Fish fishScript = fishObjetc.GetComponent<Fish>();
-        fishScript.inWater = false;
-        if (!scores.ContainsKey(fishScript.playerName))
-            scores[fishScript.playerName] = 0;
-        scores[fishScript.playerName] = scores[fishScript.playerName] - 25;
-        StartCoroutine(ReaspawnFish(fishObjetc));
+        CloseConnection();
+        connection = new TwitchIrcConnection(settings);
+        SetStatus("Connecting", $"Connecting to #{settings.channel}…", false, true);
     }
 
-    private void OnCloseHandler(object sender, CloseEventArgs e)
+    private void CloseConnection()
     {
-        Debug.Log("WebSocket closed with reason: " + e.Reason);
+        retryAt = float.PositiveInfinity;
+        connection?.Dispose();
+        connection = null;
     }
 
-    private void OnErrorHandler(object sender, ErrorEventArgs e)
+    private void OnDestroy()
     {
-        Debug.Log("WebSocket error: " + e.Message);
+        dashboard?.Dispose();
+        signIn?.Dispose();
+        rewards?.Dispose();
+        CloseConnection();
     }
 
-    void OnDestroy()
+    private bool IsNewMessage(string id)
     {
-        ws.Close();
+        if (string.IsNullOrEmpty(id))
+            return true;
+        if (!recentMessages.Add(id))
+            return false;
+        messageOrder.Enqueue(id);
+        if (messageOrder.Count > 512)
+            recentMessages.Remove(messageOrder.Dequeue());
+        return true;
     }
 
-    private GameObject CreateObjectForUser(string username)
+    private void HandleChat(string login, string displayName, string message)
     {
-        // Instantiate the fish
-        GameObject fishObject = Instantiate(fishPrefab);
+        EnsureViewer(login, displayName);
+        string command = message.TrimStart();
+        int end = command.IndexOfAny(CommandSeparators);
+        if (end >= 0)
+            command = command.Substring(0, end);
 
-        // Get the SpriteRenderer component
-        SpriteRenderer spriteRenderer = fishObject.GetComponent<SpriteRenderer>();
-        if (spriteRenderer != null)
+        switch (command.ToLowerInvariant())
         {
-            // Debug.Log(fishSprites.Length);
-            // Choose a random sprite and assign it to the SpriteRenderer
-            spriteRenderer.sprite = fishSprites[UnityEngine.Random.Range(0, fishSprites.Length - 1)];
+            case "!food": makeFood(); break;
+            case "!topfish": DisplayTopFish(); break;
+            case "!dolphin": RequestDolphin(); break;
         }
-        else
-        {
-            Debug.LogError("No SpriteRenderer found on " + fishObject.name);
-        }
-
-        // Set the name of the fish to the username
-        fishObject.name = username;
-
-        // Get the Fish script and set the player name
-        Fish fishScript = fishObject.GetComponent<Fish>();
-        if (fishScript != null)
-        {
-            fishScript.playerName = username;
-        }
-        else
-        {
-            Debug.LogError("No Fish component found on " + fishObject.name);
-        }
-        // Find the "name" child and update its TextMeshPro text
-        Transform nameTransform = fishObject.transform.Find("name");
-        if (nameTransform != null)
-        {
-            TMPro.TextMeshPro nameText = nameTransform.GetComponent<TMPro.TextMeshPro>();
-            if (nameText != null)
-            {
-                nameText.text = username;
-            }
-            else
-            {
-                Debug.LogError("No TextMeshPro component found on " + nameTransform.name);
-            }
-        }
-        else
-        {
-            Debug.LogError("No child called 'name' found on " + fishObject.name);
-        }
-        // Set the fish's position, rotation, etc.
-
-        return fishObject;
     }
 
-    private void HandleMessage(string username)
+    private void HandleReward(TwitchRewardAction action, string login, string displayName)
     {
-        if (users.ContainsKey(username))
+        EnsureViewer(login, displayName);
+        switch (action)
         {
-            actions.Enqueue(() => {
-                // Reset the time to 15 minutes from now
-                users[username] = 900;
-                Debug.Log("Time updated to " + users[username]);
-            });
+            case TwitchRewardAction.DropFood: makeFood(); break;
+            case TwitchRewardAction.TopFish: DisplayTopFish(); break;
+            case TwitchRewardAction.CallDolphin: RequestDolphin(); break;
+        }
+    }
 
-        }
-        else
+    private void EnsureViewer(string login, string displayName)
+    {
+        if (!viewers.TryGetValue(login, out Viewer viewer))
         {
-            // Instead of directly calling CreateObjectForUser, queue up the action
-            actions.Enqueue(() => {
-                //    Debug.Log(username);
-                // Add the user and instantiate a new object for them
-                users.Add(username, 900);
-                userObjects.Add(username, CreateObjectForUser(username));
-                //   Debug.Log("New fish added and the time set to" + users[username]);
-            });
+            viewer = new Viewer();
+            viewers.Add(login, viewer);
         }
+
+        viewer.DisplayName = displayName;
+        viewer.ExpiresAt = Time.unscaledTime + FishLifetime;
+        if (viewer.Fish == null)
+        {
+            viewer.Fish = Instantiate(fishPrefab);
+            Sprite appearance = fishSprites.Length == 0 ? null : fishSprites[Random.Range(0, fishSprites.Length)];
+            viewer.Fish.Initialize(this, water, spawnArea, login, displayName, appearance);
+        }
+        else if (viewer.Fish.DisplayName != displayName)
+        {
+            viewer.Fish.SetDisplayName(displayName);
+        }
+    }
+
+    public void AddScore(Fish fish, int change)
+    {
+        if (viewers.TryGetValue(fish.Login, out Viewer viewer) && viewer.Fish == fish)
+            viewer.Score += change;
     }
 
     public void makeFood()
     {
-        Vector2 spawnPosition = new Vector2(
-        UnityEngine.Random.Range(spawnArea.bounds.min.x, spawnArea.bounds.max.x),
-        UnityEngine.Random.Range(spawnArea.bounds.min.y, spawnArea.bounds.max.y)
-        );
-
-        // Instantiate the foodPrefab at the calculated position
-        GameObject fishFood = Instantiate(foodPrefab, spawnPosition, Quaternion.identity); // Use Quaternion.identity for no rotation
-
-    }
-
-    public void doDolphin()
-    {
-        Vector2 spawnPosition = new Vector2(
-       UnityEngine.Random.Range(dolphinSpawnArea.bounds.min.x, dolphinSpawnArea.bounds.max.x),
-       UnityEngine.Random.Range(dolphinSpawnArea.bounds.min.y, dolphinSpawnArea.bounds.max.y)
-       );
-
-        // Instantiate the foodPrefab at the calculated position
-        GameObject dolphin = Instantiate(dolphinPrefab, spawnPosition, Quaternion.identity); // Use Quaternion.identity for no rotation
-
-    }
-
-    public void ShowDisappointedDolphin()
-    {
-        Vector2 spawnPosition = new Vector2(-17, -7);
-        GameObject dissapDolph = Instantiate(dissapDolphPrefab, spawnPosition, Quaternion.identity);
-        StartCoroutine(RemoveDissapDolphAfterDelay(dissapDolph, 3f));
-    }
-
-    private IEnumerator RemoveDissapDolphAfterDelay(GameObject dissapDolph, float delay)
-    {
-        yield return new WaitForSeconds(delay);
-        Destroy(dissapDolph);
-    }
-
-    IEnumerator ReaspawnFish(GameObject fish)
-    {
-        yield return new WaitForSeconds(3f);
-
-        Vector2 spawnPosition = new Vector2(
-        UnityEngine.Random.Range(spawnArea.bounds.min.x, spawnArea.bounds.max.x),
-        UnityEngine.Random.Range(spawnArea.bounds.min.y, spawnArea.bounds.max.y)
-        );
-
-        fish.transform.position = spawnPosition;
-        fish.GetComponent<SpriteRenderer>().enabled = true;
-
+        Instantiate(foodPrefab, RandomSpawnPoint(spawnArea, -1f), Quaternion.identity);
     }
 
     public void SimulateChatMessage()
     {
-        // Generate a random username with a base of "user" and a random number
-        string randomUsername = "user" + UnityEngine.Random.Range(0, 10000);
-        HandleMessage(randomUsername);
+        int number = ++demoCount;
+        HandleChat($"demo:{number}", $"Demo fish {number}", "");
     }
 
-    private IEnumerator CheckAndRemoveObjects()
+    private void RequestDolphin()
     {
+        if (Time.time < nextDolphinTime)
+        {
+            var disappointed = Instantiate(dissapDolphPrefab, new Vector3(-17f, -7f, -2f), Quaternion.identity);
+            Destroy(disappointed, 3f);
+            return;
+        }
+
+        nextDolphinTime = Time.time + DolphinCooldown;
+        var candidates = viewers.Values.Where(viewer => viewer.Fish != null && viewer.Fish.IsSwimming).ToList();
+        Fish target = candidates.Count == 0 ? null : candidates[Random.Range(0, candidates.Count)].Fish;
+        Dolphin dolphin = Instantiate(dolphinPrefab, RandomSpawnPoint(dolphinSpawnArea, -2f), Quaternion.identity);
+        dolphin.Hunt(target);
+    }
+
+    private void DisplayTopFish()
+    {
+        var leaders = viewers.Values.OrderByDescending(viewer => viewer.Score)
+            .ThenBy(viewer => viewer.DisplayName, StringComparer.OrdinalIgnoreCase).Take(5);
+        topFishText.text = "Top fishes\n" + string.Join("\n", leaders.Select(viewer => $"{viewer.DisplayName}  {viewer.Score}"));
+        topFishCanvas.SetActive(true);
+
+        if (hideScores != null)
+            StopCoroutine(hideScores);
+        hideScores = StartCoroutine(HideScores());
+    }
+
+    private IEnumerator HideScores()
+    {
+        yield return new WaitForSeconds(5f);
+        topFishCanvas.SetActive(false);
+        hideScores = null;
+    }
+
+    private IEnumerator RemoveInactiveFish()
+    {
+        var wait = new WaitForSecondsRealtime(1f);
         while (true)
         {
-            var usersToDecrease = new List<string>(users.Keys);
-            var usersToRemove = new List<string>();
-
-            foreach (var user in usersToDecrease)
+            yield return wait;
+            foreach (var entry in viewers)
             {
-                // Decrease the time remaining for each user
-                users[user]--;
-
-                if (users[user] <= 0)
+                Viewer viewer = entry.Value;
+                if (viewer.ExpiresAt > Time.unscaledTime)
+                    continue;
+                if (viewer.Fish != null)
                 {
-                    // Time to destroy the user's object
-                    Destroy(userObjects[user]);
-                    usersToRemove.Add(user);
+                    Destroy(viewer.Fish.gameObject);
+                    viewer.Fish = null;
                 }
+                if (viewer.Score == 0)
+                    expiredViewers.Add(entry.Key);
             }
 
-            // Remove users from dictionaries
-            foreach (var user in usersToRemove)
-            {
-                Debug.Log("User removed" + user);
-
-                users.Remove(user);
-                userObjects.Remove(user);
-            }
-
-            yield return new WaitForSeconds(1);
+            foreach (string login in expiredViewers)
+                viewers.Remove(login);
+            expiredViewers.Clear();
         }
+    }
+
+    private static Vector3 RandomSpawnPoint(BoxCollider2D area, float z)
+    {
+        Bounds bounds = area.bounds;
+        return new Vector3(Random.Range(bounds.min.x, bounds.max.x), Random.Range(bounds.min.y, bounds.max.y), z);
     }
 }

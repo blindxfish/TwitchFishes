@@ -1,0 +1,251 @@
+"use strict";
+
+const element = id => document.getElementById(id);
+const sessionKey = readSessionKey();
+const output = element("dashboard-status");
+const signInForm = element("signin-form");
+const chatForm = element("chat-form");
+const rewardForm = element("rewards-form");
+const commands = [...document.querySelectorAll("button[data-command]")];
+const actionNames = ["No action", "Join aquarium", "Drop food", "Show top fish", "Call dolphin"];
+let current;
+let pending = false;
+let commandVersion = 0;
+let clearRewardToken = false;
+let previousCatalog = "";
+let initialized = false;
+
+function readSessionKey() {
+    const key = window.location.hash.slice(1);
+    if (key) {
+        sessionStorage.setItem("twitchfishes-control-key", key);
+        history.replaceState(null, "", window.location.pathname);
+        return key;
+    }
+    return sessionStorage.getItem("twitchfishes-control-key");
+}
+
+function text(target, value) {
+    if (target.textContent !== value) target.textContent = value;
+}
+
+function setStatus(message, failed = false) {
+    text(output, message);
+    output.classList.toggle("error", failed);
+}
+
+function setButtons() {
+    const signIn = current?.signIn;
+    const manualBlocked = !current || pending || signIn.busy || signIn.ownsConnection;
+    element("signin-start").disabled = !current || pending || signIn.busy || signIn.ownsConnection;
+    chatForm.querySelector("button[type=submit]").disabled = manualBlocked;
+    rewardForm.querySelector("button[type=submit]").disabled = manualBlocked;
+    for (const button of commands) {
+        const command = button.dataset.command;
+        button.disabled = !current || pending
+            || command === "cancelTwitchSignIn" && !signIn.canCancel
+            || command === "disconnectTwitch" && !signIn.ownsConnection
+            || command === "disconnectChat" && (manualBlocked || !current.chat.canDisconnect)
+            || command === "disconnectRewards" && (manualBlocked || !current.rewards.canDisconnect)
+            || command === "refreshRewards" && !current.rewards.canRefresh;
+    }
+    for (const select of document.querySelectorAll("#reward-rows select")) select.disabled = !current || pending;
+    for (const button of document.querySelectorAll("#reward-rows button")) {
+        button.disabled = !current || pending || button.dataset.assigned !== "true";
+    }
+}
+
+function render(snapshot) {
+    current = snapshot;
+    const { chat, rewards, signIn } = snapshot;
+    if (!initialized) {
+        element("channel").value = chat.channel || "";
+        element("chat-login").value = chat.login || "";
+        element("chat-remember").checked = chat.remember;
+        element("rewards-remember").checked = rewards.remember;
+        element("twitch-client-id").value = signIn.hasClientId ? signIn.clientId : "";
+        element("twitch-app-setup").open = !signIn.hasClientId;
+        element("signin-remember").checked = signIn.remember;
+        initialized = true;
+    }
+
+    renderSignIn(signIn);
+    text(element("chat-badge"), chat.connected ? "Live" : chat.canDisconnect ? "Connecting" : "Offline");
+    element("chat-badge").classList.toggle("live", chat.connected);
+    text(element("chat-detail"), chat.error || chat.detail || chat.summary || "Offline");
+    element("chat-detail").classList.toggle("error", Boolean(chat.error));
+    element("chat-token").placeholder = chat.hasToken ? "Leave blank to reuse the current chat token" : "User access token with chat:read";
+
+    text(element("rewards-badge"), rewards.connected ? "Listening" : rewards.canDisconnect ? "Connecting" : "Offline");
+    element("rewards-badge").classList.toggle("live", rewards.connected);
+    text(element("rewards-detail"), rewards.detail || "");
+    element("rewards-token").placeholder = rewards.hasToken
+        ? "Leave blank to reuse the saved broadcaster token"
+        : "Paste a broadcaster token or use the chat token";
+    if (clearRewardToken && rewards.connected) {
+        element("rewards-token").value = "";
+        clearRewardToken = false;
+    }
+    text(element("latest-redemption"), rewards.latest || "Latest redemption will appear here.");
+    const channel = rewards.channel || chat.channel;
+    element("manage-rewards").href = channel
+        ? "https://dashboard.twitch.tv/u/" + encodeURIComponent(channel) + "/viewer-rewards/channel-points/rewards"
+        : "https://dashboard.twitch.tv/viewer-rewards/channel-points/rewards";
+
+    renderCatalog(rewards);
+    setButtons();
+}
+
+function renderSignIn(signIn) {
+    const challenge = Boolean(signIn.verificationUrl);
+    text(element("signin-detail"), challenge ? "Open Twitch and approve chat and Channel Points access." : signIn.detail);
+    signInForm.hidden = signIn.ownsConnection;
+    element("signin-start").textContent = signIn.busy ? "Connecting…" : "Connect with Twitch";
+    element("twitch-client-id").readOnly = signIn.busy;
+    element("signin-remember").disabled = !signIn.canRemember || signIn.busy;
+    element("signin-remember-unavailable").hidden = signIn.canRemember;
+    element("twitch-challenge").hidden = !challenge;
+    if (challenge) {
+        element("twitch-approve").href = signIn.verificationUrl;
+        text(element("twitch-user-code"), signIn.userCode);
+    } else {
+        element("twitch-approve").removeAttribute("href");
+        text(element("twitch-user-code"), "");
+    }
+    document.querySelector('[data-command="cancelTwitchSignIn"]').hidden = !signIn.canCancel;
+    document.querySelector('[data-command="disconnectTwitch"]').hidden = !signIn.ownsConnection;
+    element("manual-chat").hidden = signIn.ownsConnection;
+    element("manual-rewards").hidden = signIn.ownsConnection;
+}
+
+function renderCatalog(rewards) {
+    const catalog = rewards.catalog || [];
+    text(element("catalog-heading"), rewards.channel ? "Custom rewards (" + catalog.length + ")" : "Custom rewards");
+    element("catalog-empty").hidden = catalog.length > 0;
+    element("reward-table").hidden = catalog.length === 0;
+    text(element("catalog-empty"), rewards.channel
+        ? "This channel has no custom rewards. Create one on Twitch, then refresh."
+        : "Connect with Twitch to load your custom rewards.");
+
+    const signature = JSON.stringify(catalog);
+    if (signature === previousCatalog) return;
+    previousCatalog = signature;
+
+    const focusedReward = document.activeElement?.dataset.rewardId;
+    const rows = catalog.map(reward => {
+        const row = document.createElement("tr");
+        const name = row.insertCell();
+        const title = document.createElement("strong");
+        title.textContent = reward.title;
+        const details = document.createElement("small");
+        details.textContent = new Intl.NumberFormat().format(reward.cost) + " points · " + reward.availability;
+        name.append(title, details);
+
+        const select = document.createElement("select");
+        select.setAttribute("aria-label", "Action for " + reward.title);
+        select.dataset.rewardId = reward.id;
+        actionNames.forEach((label, index) => select.add(new Option(label, String(index))));
+        select.value = String(reward.action);
+        select.addEventListener("change", () => execute({ command: "setRewardAction", rewardId: reward.id, action: Number(select.value) }));
+        row.insertCell().append(select);
+
+        const preview = document.createElement("button");
+        preview.type = "button";
+        preview.textContent = "Preview";
+        preview.title = "Run " + reward.title + " in the captured aquarium";
+        preview.dataset.assigned = String(reward.action !== 0);
+        preview.addEventListener("click", () => execute({ command: "previewReward", rewardId: reward.id }));
+        row.insertCell().append(preview);
+        return row;
+    });
+    element("reward-rows").replaceChildren(...rows);
+    if (focusedReward) {
+        [...element("reward-rows").querySelectorAll("select")].find(select => select.dataset.rewardId === focusedReward)?.focus();
+    }
+}
+
+async function request(command) {
+    if (!sessionKey) throw new Error("Press F2 in the aquarium window to open a new dashboard.");
+    const headers = { Authorization: "Bearer " + sessionKey };
+    const options = { headers, cache: "no-store" };
+    if (command) {
+        headers["Content-Type"] = "application/json";
+        options.method = "POST";
+        options.body = JSON.stringify(command);
+    }
+    const reply = await fetch(command ? "/api/action" : "/api/state", options);
+    if (reply.status === 401) throw new Error("Press F2 in the aquarium window to reconnect this dashboard.");
+    if (reply.status === 400) throw new Error("That action is unavailable. Refresh the reward list and try again.");
+    if (!reply.ok) throw new Error("The aquarium is busy. Try again.");
+    return reply.json();
+}
+
+async function execute(command) {
+    if (pending) return;
+    pending = true;
+    commandVersion++;
+    if (command.command === "connectRewards") clearRewardToken = true;
+    setButtons();
+    try {
+        render(await request(command));
+        setStatus("Aquarium connected");
+        if (command.command === "connectChat" && !current.chat.error) element("chat-token").value = "";
+    } catch (error) {
+        setStatus(error.message, true);
+    } finally {
+        pending = false;
+        setButtons();
+    }
+}
+
+async function poll() {
+    if (!pending) {
+        const version = commandVersion;
+        try {
+            const snapshot = await request();
+            if (version === commandVersion && !pending) {
+                render(snapshot);
+                setStatus("Aquarium connected");
+            }
+        } catch (error) {
+            if (version === commandVersion && !pending) {
+                current = null;
+                setStatus(error instanceof TypeError ? "Aquarium disconnected. Launch TwitchFishes and press F2." : error.message, true);
+                setButtons();
+            }
+        }
+    }
+    if (sessionKey) window.setTimeout(poll, 1500);
+}
+
+signInForm.addEventListener("submit", event => {
+    event.preventDefault();
+    const client = element("twitch-client-id");
+    if (!client.value.trim()) {
+        element("twitch-app-setup").open = true;
+        client.focus();
+    }
+    execute({ command: "beginTwitchSignIn", clientId: client.value, remember: element("signin-remember").checked });
+});
+chatForm.addEventListener("submit", event => {
+    event.preventDefault();
+    execute({
+        command: "connectChat",
+        channel: element("channel").value,
+        login: element("chat-login").value,
+        token: element("chat-token").value,
+        remember: element("chat-remember").checked
+    });
+});
+rewardForm.addEventListener("submit", event => {
+    event.preventDefault();
+    execute({
+        command: "connectRewards",
+        token: element("rewards-token").value,
+        remember: element("rewards-remember").checked
+    });
+});
+for (const button of commands) {
+    button.addEventListener("click", () => execute({ command: button.dataset.command }));
+}
+poll();

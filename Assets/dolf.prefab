@@ -125,7 +125,6 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: bd39f0d5917912c49b801f535ddf34b2, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  target: {fileID: 0}
   moveSpeed: 70
   dissapDolphPrefab: {fileID: 1810859490475419921, guid: 42a08951e7e59734e8f7f30d186b066a, type: 3}
   dissapDolphStartPosition: {x: -51.9, y: -14.8}
@@ -145,9 +144,9 @@ Rigidbody2D:
   m_Mass: 1
   m_LinearDrag: 0
   m_AngularDrag: 0.05
-  m_GravityScale: 1
+  m_GravityScale: 0
   m_Material: {fileID: 0}
-  m_Interpolate: 0
+  m_Interpolate: 1
   m_SleepingMode: 1
   m_CollisionDetection: 0
   m_Constraints: 0
